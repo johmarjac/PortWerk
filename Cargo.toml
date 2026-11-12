@@ -1,0 +1,19 @@
+[package]
+name = "portwerk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.37", features = ["persistence"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serialport = { version = "4.10", default-features = false }
+serde = { version = "1", features = ["derive"] }
+rfd = "0.18.0"
+chrono = "0.4.45"
+mlua = { version = "0.12.2", features = ["lua54", "vendored"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = "0.30"
+
+[profile.release]
+opt-level = 2
