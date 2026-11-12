@@ -31,6 +31,24 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 | `log(...)` / `print(...)` | Meldung ins Fenster schreiben |
 | `from_hex`, `to_hex`, `crc16_modbus`, `crc16_ccitt`, `crc32`, `crc8`, `sum8`, `xor8` | Helfer |
 
+## Releases (Downloads für alle Systeme)
+
+Eine neue Version erstellen Sie so:
+
+1. Auf GitHub den Reiter **Actions** öffnen und links **Release** wählen.
+2. Rechts auf **Run workflow** klicken und eine Version eintragen, zum Beispiel `0.2.0`.
+3. Nach etwa 10–15 Minuten liegt unter **Releases** die neue Version mit allen Dateien.
+
+Statt Schritt 1 und 2 können Sie auch einen Tag wie `v0.2.0` hochladen.
+
+| System | Datei |
+|---|---|
+| Windows | `…-windows-x64.msi` (Installer) und `…-windows-x64-portable.exe` (ohne Installation) |
+| macOS (Intel + Apple Silicon) | `…-macos-universal.dmg` und `…-macos-universal.zip` |
+| Linux x64 / ARM64 | `…-linux-x64.deb`, `…-linux-arm64.deb` und `.tar.gz` |
+
+Bei jedem Hochladen auf `main` baut und testet der Workflow **CI** das Programm automatisch unter Windows, macOS und Linux.
+
 ## Bauen
 
 ```

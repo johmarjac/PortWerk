@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PortWerk
+GenericName=Terminal für Seriell, TCP und UDP
+Comment=Serielle Schnittstellen, TCP-Client, TCP-Server und UDP in einem Fenster
+Exec=portwerk
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;Utility;
+Keywords=serial;rs232;tcp;udp;terminal;modbus;

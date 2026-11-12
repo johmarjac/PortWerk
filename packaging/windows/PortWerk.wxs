@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MSI installer for PortWerk (WiX Toolset v5).
+  Built by .github/workflows/release.yml:
+    wix build -arch x64 -d Version=1.2.3 -d BinPath=path\to\portwerk.exe PortWerk.wxs -o PortWerk.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="PortWerk"
+           Manufacturer="PortWerk"
+           Version="$(var.Version)"
+           UpgradeCode="6E0C2F5B-7F43-4C1B-9A57-2D8E5A3B9C41"
+           Scope="perMachine"
+           Language="1031"
+           Codepage="1252">
+    <SummaryInformation Description="PortWerk – Terminal für Seriell, TCP und UDP" />
+
+    <MajorUpgrade DowngradeErrorMessage="Eine neuere Version von PortWerk ist bereits installiert." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="PortWerk">
+        <Component Id="MainExecutable">
+          <File Id="PortWerkExe" Source="$(var.BinPath)" Name="PortWerk.exe" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="PortWerkStartMenu"
+                  Name="PortWerk"
+                  Description="Terminal für Seriell, TCP und UDP"
+                  Target="[INSTALLFOLDER]PortWerk.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="Software\PortWerk" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="PortWerk">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+</Wix>

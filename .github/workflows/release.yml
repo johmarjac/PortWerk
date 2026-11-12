@@ -1,0 +1,228 @@
+# Builds PortWerk for every platform and publishes a GitHub release.
+#
+# Start it by hand: GitHub → Actions → "Release" → "Run workflow",
+# enter a version like 0.2.0. Or push a tag such as v0.2.0.
+#
+# Result per release:
+#   Windows x64   PortWerk-<v>-windows-x64.msi            (installer)
+#                 PortWerk-<v>-windows-x64-portable.exe   (no install needed)
+#   macOS         PortWerk-<v>-macos-universal.dmg        (Intel + Apple Silicon)
+#                 PortWerk-<v>-macos-universal.zip        (the .app)
+#   Linux x64     PortWerk-<v>-linux-x64.deb / .tar.gz
+#   Linux ARM64   PortWerk-<v>-linux-arm64.deb / .tar.gz
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (z. B. 0.2.0) – wird als Tag v0.2.0 angelegt"
+        required: true
+        type: string
+      prerelease:
+        description: "Als Vorabversion markieren"
+        type: boolean
+        default: false
+      draft:
+        description: "Nur als Entwurf anlegen (noch nicht öffentlich)"
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Version festlegen
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          VERSION="${VERSION#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version muss die Form 1.2.3 haben (bekommen: '$VERSION')"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+  windows:
+    name: Windows x64 (MSI + portabel)
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Version eintragen
+        shell: bash
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+      - name: Bauen
+        run: cargo build --release
+      - name: Portable EXE
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/portwerk.exe "dist/PortWerk-$VERSION-windows-x64-portable.exe"
+      - name: WiX installieren
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: MSI bauen
+        shell: pwsh
+        run: |
+          wix build -arch x64 `
+            -d Version=$env:VERSION `
+            -d BinPath="$PWD\target\release\portwerk.exe" `
+            packaging\windows\PortWerk.wxs `
+            -o "dist\PortWerk-$env:VERSION-windows-x64.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item dist\*.wixpdb -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS (Universal)
+    needs: prepare
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Version eintragen
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+      - name: Bauen (Apple Silicon + Intel)
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+      - name: App-Paket und DMG
+        run: |
+          APP="dist/PortWerk.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          lipo -create \
+            target/aarch64-apple-darwin/release/portwerk \
+            target/x86_64-apple-darwin/release/portwerk \
+            -output "$APP/Contents/MacOS/PortWerk"
+          chmod +x "$APP/Contents/MacOS/PortWerk"
+          sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          (cd dist && ditto -c -k --keepParent PortWerk.app "PortWerk-$VERSION-macos-universal.zip")
+          mkdir -p dmg
+          cp -R "$APP" dmg/
+          ln -s /Applications dmg/Programme
+          hdiutil create -volname "PortWerk $VERSION" -srcfolder dmg -ov -format UDZO \
+            "dist/PortWerk-$VERSION-macos-universal.dmg"
+          rm -rf "$APP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }} (.deb + .tar.gz)
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Systempakete
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - name: Version eintragen
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+      - name: Bauen
+        run: cargo build --release
+      - name: Pakete
+        run: |
+          mkdir -p dist
+          cargo deb --no-build --output "dist/PortWerk-$VERSION-linux-${{ matrix.arch }}.deb"
+          mkdir -p "pkg/PortWerk-$VERSION"
+          cp target/release/portwerk packaging/linux/portwerk.desktop README.md "pkg/PortWerk-$VERSION/"
+          tar -C pkg -czf "dist/PortWerk-$VERSION-linux-${{ matrix.arch }}.tar.gz" "PortWerk-$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release veröffentlichen
+    needs: [prepare, windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Prüfsummen
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          ls -l
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: PortWerk ${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.prerelease || false }}
+          draft: ${{ inputs.draft || false }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Downloads
+
+            | System | Datei |
+            |---|---|
+            | Windows (Installer) | `PortWerk-${{ needs.prepare.outputs.version }}-windows-x64.msi` |
+            | Windows (portabel, ohne Installation) | `PortWerk-${{ needs.prepare.outputs.version }}-windows-x64-portable.exe` |
+            | macOS (Intel + Apple Silicon) | `PortWerk-${{ needs.prepare.outputs.version }}-macos-universal.dmg` |
+            | Linux (Debian/Ubuntu) | `PortWerk-${{ needs.prepare.outputs.version }}-linux-x64.deb` / `-arm64.deb` |
+            | Linux (andere) | `PortWerk-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz` / `-arm64.tar.gz` |
+
+            macOS: Die App ist nicht von Apple beglaubigt. Beim ersten Start mit Rechtsklick → „Öffnen“ starten.
+          files: dist/*
