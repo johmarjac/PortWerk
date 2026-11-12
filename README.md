@@ -8,6 +8,7 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 - **TCP-Client:** mit Geräten oder Diensten verbinden.
 - **TCP-Server:** mehrere Clients annehmen, an alle oder an einzelne senden, Clients trennen.
 - **UDP:** senden und empfangen, auch Broadcast und Antwort an den letzten Absender.
+- **REST-Client:** Anfragen mit GET, POST, PUT, PATCH, DELETE, HEAD und OPTIONS, mit Parametern, Headern, Body (JSON, Text, Formular) und Anmeldung (Bearer-Token, Benutzer + Passwort, API-Schlüssel). Dazu gespeicherte Anfragen, Variablen wie `{{baseUrl}}`, Verlauf, formatierte JSON-Antworten und Export als cURL-Befehl.
 - **Anzeige:** Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen. Dazu Echo, Pause, Speichern und laufende Mitschrift in eine Datei.
 - **Senden:**
   - *Zeilen:* beliebig viele Sendezeilen, als Text mit `$0D`/`#13`-Escapes oder als Hex, mit automatischer Wiederholung.
@@ -29,6 +30,7 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 | `wait_for("OK", ms)` | `true`, wenn „OK“ rechtzeitig kam |
 | `clear_rx()` | Empfangspuffer leeren |
 | `log(...)` / `print(...)` | Meldung ins Fenster schreiben |
+| `http_get(url)`, `http_post(url, body)`, `http_request(methode, url, body, typ)` | HTTP-Anfragen, liefern Status und Antwort |
 | `from_hex`, `to_hex`, `crc16_modbus`, `crc16_ccitt`, `crc32`, `crc8`, `sum8`, `xor8` | Helfer |
 
 ## Releases (Downloads für alle Systeme)

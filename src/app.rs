@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ascii::AsciiTable;
 use crate::link::{self, Cmd, Event, Flow, Link, ModemLines, Parity, SerialConfig};
 use crate::terminal::{Dir, SendMode, SendRequest, TermSettings, Terminal};
+use crate::rest::{RestClient, RestSettings};
 use crate::tools::Tools;
 
 pub const APP_NAME: &str = "PortWerk";
@@ -17,6 +18,7 @@ pub enum Tab {
     TcpClient,
     TcpServer,
     Udp,
+    Rest,
     Tools,
     About,
 }
@@ -28,6 +30,7 @@ impl Tab {
             Tab::TcpClient => "🔗 TCP-Client",
             Tab::TcpServer => "🗄 TCP-Server",
             Tab::Udp => "📡 UDP",
+            Tab::Rest => "🌐 REST",
             Tab::Tools => "🧮 Werkzeuge",
             Tab::About => "ℹ Info",
         }
@@ -57,6 +60,7 @@ struct Saved {
     udp_broadcast: bool,
     udp_reply: bool,
     udp_term: TermSettings,
+    rest: RestSettings,
 }
 
 impl Default for Saved {
@@ -81,6 +85,7 @@ impl Default for Saved {
             udp_broadcast: false,
             udp_reply: false,
             udp_term: TermSettings::default(),
+            rest: RestSettings::default(),
         }
     }
 }
@@ -203,6 +208,7 @@ pub struct PortWerkApp {
     udp_reply: bool,
     udp_last_sender: Option<String>,
     udp: Conn,
+    rest: RestClient,
     tools: Tools,
     ascii: AsciiTable,
     // screenshot mode
@@ -249,6 +255,7 @@ impl PortWerkApp {
             udp_reply: saved.udp_reply,
             udp_last_sender: None,
             udp: Conn { needs_target: true, ..Conn::new(saved.udp_term, "Bereit. Lokalen Port öffnen, dann an Ziel senden.") },
+            rest: RestClient::new(saved.rest),
             tools: Tools::default(),
             ascii: AsciiTable::default(),
             shot,
@@ -265,6 +272,7 @@ impl PortWerkApp {
                 "tcpc" => Tab::TcpClient,
                 "tcps" => Tab::TcpServer,
                 "udp" => Tab::Udp,
+                "rest" => Tab::Rest,
                 "tools" => Tab::Tools,
                 "info" => Tab::About,
                 _ => Tab::Serial,
@@ -317,6 +325,7 @@ impl PortWerkApp {
             udp_broadcast: self.udp_broadcast,
             udp_reply: self.udp_reply,
             udp_term: self.udp.term.s.clone(),
+            rest: self.rest.s.clone(),
         }
     }
 
@@ -674,6 +683,7 @@ impl PortWerkApp {
                     "Als TCP-Client mit Geräten oder Diensten verbinden",
                     "Als TCP-Server mehrere Clients annehmen, an alle oder einzelne senden, Clients trennen",
                     "UDP-Pakete senden und empfangen, auch Broadcast und Antwort an den letzten Absender",
+                    "REST-Client: GET/POST/PUT/PATCH/DELETE, Parameter, Header, JSON/Text/Formular-Body, Anmeldung (Token, Benutzer, API-Schlüssel), Variablen wie {{baseUrl}}, Verlauf, cURL-Export",
                     "Anzeige als Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen",
                     "Beliebig viele Sendezeilen, als Text mit $XX-/#DDD-Escapes oder als Hex, mit automatischer Wiederholung",
                     "Schleife: mehrere Zeilen nacheinander mit eigenen Pausen senden, x-mal oder endlos",
@@ -719,7 +729,7 @@ impl eframe::App for PortWerkApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(APP_NAME).strong().size(18.0).color(Color32::from_rgb(0, 130, 160)));
                     ui.add_space(12.0);
-                    for t in [Tab::Serial, Tab::TcpClient, Tab::TcpServer, Tab::Udp, Tab::Tools, Tab::About] {
+                    for t in [Tab::Serial, Tab::TcpClient, Tab::TcpServer, Tab::Udp, Tab::Rest, Tab::Tools, Tab::About] {
                         let conn = match t {
                             Tab::Serial => Some(&self.serial),
                             Tab::TcpClient => Some(&self.tcpc),
@@ -728,7 +738,7 @@ impl eframe::App for PortWerkApp {
                             _ => None,
                         };
                         let active = conn.is_some_and(|c| c.open);
-                        let busy = conn.is_some_and(|c| c.term.busy());
+                        let busy = conn.is_some_and(|c| c.term.busy()) || (t == Tab::Rest && self.rest.busy());
                         let label = if busy { format!("{} 🔁", t.label()) } else { t.label().to_string() };
                         let mut text = RichText::new(label).size(14.5);
                         if active {
@@ -774,6 +784,7 @@ impl eframe::App for PortWerkApp {
             Tab::TcpClient => self.tcp_client_tab(ui),
             Tab::TcpServer => self.tcp_server_tab(ui),
             Tab::Udp => self.udp_tab(ui),
+            Tab::Rest => self.rest.ui(ui),
             Tab::Tools => self.tools.ui(ui),
             Tab::About => self.about_tab(ui),
         }
@@ -785,7 +796,7 @@ impl eframe::App for PortWerkApp {
                 Tab::TcpServer => self.tcps.term.insert_byte(b),
                 Tab::Udp => self.udp.term.insert_byte(b),
                 Tab::Tools => self.tools.insert_byte(b),
-                Tab::About => {}
+                Tab::Rest | Tab::About => {}
             }
         }
 

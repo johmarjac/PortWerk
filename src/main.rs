@@ -4,6 +4,7 @@ mod app;
 mod ascii;
 mod codec;
 mod link;
+mod rest;
 mod script;
 mod terminal;
 mod tools;

@@ -231,6 +231,23 @@ fn setup(lua: &Lua, emit: impl Fn(ScriptMsg) + Clone + 'static, stop: Arc<Atomic
     g.set("sum8", lua.create_function(|_, s: mlua::LuaString| Ok(codec::sum8(&s.as_bytes()) as i64))?)?;
     g.set("xor8", lua.create_function(|_, s: mlua::LuaString| Ok(codec::xor8(&s.as_bytes()) as i64))?)?;
 
+    // --- HTTP (e.g. forward measured values to a REST API)
+    g.set("http_get", lua.create_function(|lua, url: String| {
+        let (status, body) = crate::rest::simple_request("GET", &url, None, None).map_err(mlua::Error::runtime)?;
+        Ok((status as i64, lua.create_string(body)?))
+    })?)?;
+    g.set("http_post", lua.create_function(|lua, (url, body, ct): (String, mlua::LuaString, Option<String>)| {
+        let ct = ct.unwrap_or_else(|| "application/json".into());
+        let (status, body) = crate::rest::simple_request("POST", &url, Some(body.as_bytes().to_vec()), Some(&ct))
+            .map_err(mlua::Error::runtime)?;
+        Ok((status as i64, lua.create_string(body)?))
+    })?)?;
+    g.set("http_request", lua.create_function(|lua, (method, url, body, ct): (String, String, Option<mlua::LuaString>, Option<String>)| {
+        let (status, body) = crate::rest::simple_request(&method, &url, body.map(|b| b.as_bytes().to_vec()), ct.as_deref())
+            .map_err(mlua::Error::runtime)?;
+        Ok((status as i64, lua.create_string(body)?))
+    })?)?;
+
     // scripts talk to the connection only: no files, processes or modules
     for name in ["os", "io", "require", "dofile", "loadfile", "package", "debug"] {
         g.set(name, mlua::Value::Nil)?;
@@ -323,6 +340,20 @@ end
 "#,
     ),
     (
+        "Messwert an REST-API weiterleiten",
+        r#"-- Liest Antworten vom Gerät und schickt jede Zeile als JSON an eine API
+local url = "https://httpbin.org/post"
+while true do
+    local zeile = recv(2000)
+    if #zeile > 0 then
+        local json = '{"wert": "' .. zeile:gsub("[\r\n\"]", "") .. '"}'
+        local status, antwort = http_post(url, json)
+        log("API-Antwort: " .. status)
+    end
+end
+"#,
+    ),
+    (
         "Endlos-Schleife mit Zähler",
         r#"-- Sendet jede Sekunde AA + Zähler-Byte – läuft bis Stopp
 local n = 0
@@ -347,6 +378,10 @@ Befehle:
   clear_rx()             Empfangspuffer leeren
   log(…) / print(…)      Meldung ins Fenster schreiben
   now_ms()               Millisekunden seit Skriptstart
+HTTP / REST (liefert Status und Antwort):
+  local st, txt = http_get(\"https://…\")
+  local st, txt = http_post(\"https://…\", '{\"wert\":1}')   (JSON)
+  http_request(\"PUT\", url, body, \"text/plain\")
 Helfer:
   from_hex(\"01 02\"), to_hex(daten), string.char(1, 2), #daten
   crc16_modbus(d), crc16_ccitt(d), crc32(d), crc8(d), sum8(d), xor8(d)";
