@@ -591,6 +591,10 @@ pub struct ModbusSession {
     in_flight: bool,
     last_poll: Instant,
     table: Option<Table>,
+    /// Read function the table came from (to know what a write changes).
+    table_func: Option<Func>,
+    /// Read the table range again after a write, to show what the device really stored.
+    reread: bool,
     last_result: Option<(bool, String)>,
     ok: u64,
     errors: u64,
@@ -619,6 +623,8 @@ impl ModbusSession {
             in_flight: false,
             last_poll: Instant::now(),
             table: None,
+            table_func: None,
+            reread: false,
             last_result: None,
             ok: 0,
             errors: 0,
@@ -628,6 +634,43 @@ impl ModbusSession {
 
     pub fn saved(&self) -> ModbusSaved {
         self.s.clone()
+    }
+
+    /// Show a successful write in the table right away and confirm it by reading again.
+    fn apply_write(&mut self, req: &Request) {
+        let target = match req.func {
+            Func::WriteCoil | Func::WriteCoils => Func::ReadCoils,
+            Func::WriteRegister | Func::WriteRegisters => Func::ReadHolding,
+            _ => return,
+        };
+        if self.table_func != Some(target) {
+            return;
+        }
+        let mut touched = false;
+        match &mut self.table {
+            Some(Table::Bits(start, bits)) => {
+                for (k, v) in req.values.iter().enumerate() {
+                    let i = (req.addr as usize + k).wrapping_sub(*start as usize);
+                    if let Some(b) = bits.get_mut(i) {
+                        *b = *v != 0;
+                        touched = true;
+                    }
+                }
+            }
+            Some(Table::Regs(start, regs)) => {
+                for (k, v) in req.values.iter().enumerate() {
+                    let i = (req.addr as usize + k).wrapping_sub(*start as usize);
+                    if let Some(r) = regs.get_mut(i) {
+                        *r = *v;
+                        touched = true;
+                    }
+                }
+            }
+            None => {}
+        }
+        if touched {
+            self.reread = true;
+        }
     }
 
     fn request(&mut self, req: Request) {
@@ -814,7 +857,7 @@ impl ModbusSession {
                         ui.label(RichText::new("Noch keine Werte gelesen.").weak().italics());
                     }
                     Some(Table::Bits(start, bits)) => {
-                        let is_coils = self.s.read_func == Func::ReadCoils;
+                        let is_coils = self.table_func == Some(Func::ReadCoils);
                         egui::Grid::new("mb_bits").num_columns(3).striped(true).spacing([24.0, 4.0]).show(ui, |ui| {
                             ui.label(RichText::new("Adresse").strong());
                             ui.label(RichText::new("Wert").strong());
@@ -833,7 +876,7 @@ impl ModbusSession {
                     }
                     Some(Table::Regs(start, regs)) => {
                         let rows = format_regs(*start, regs, self.s.format);
-                        let is_holding = self.s.read_func == Func::ReadHolding;
+                        let is_holding = self.table_func == Some(Func::ReadHolding);
                         egui::Grid::new("mb_regs").num_columns(4).striped(true).spacing([24.0, 4.0]).show(ui, |ui| {
                             ui.label(RichText::new("Adresse").strong());
                             ui.label(RichText::new("Wert").strong());
@@ -854,7 +897,8 @@ impl ModbusSession {
                 });
             });
         if let Some((a, v)) = write_coil {
-            if connected && !self.in_flight {
+            // the worker handles requests in order, so this is queued behind a running read
+            if connected {
                 self.request(Request { unit: self.s.unit, func: Func::WriteCoil, addr: a, qty: 1, values: vec![v as u16] });
             }
         }
@@ -918,10 +962,17 @@ impl Session for ModbusSession {
                             self.ok += 1;
                             self.last_result = Some((true, format!("{} – OK in {ms} ms", req.func.label())));
                             match reply {
-                                Reply::Bits(b) => self.table = Some(Table::Bits(req.addr, b)),
-                                Reply::Regs(r) => self.table = Some(Table::Regs(req.addr, r)),
+                                Reply::Bits(b) => {
+                                    self.table = Some(Table::Bits(req.addr, b));
+                                    self.table_func = Some(req.func);
+                                }
+                                Reply::Regs(r) => {
+                                    self.table = Some(Table::Regs(req.addr, r));
+                                    self.table_func = Some(req.func);
+                                }
                                 Reply::Written => {
                                     self.log.info(format!("Geschrieben: {} ab Adresse {}", req.func.label(), req.addr));
+                                    self.apply_write(&req);
                                 }
                             }
                         }
@@ -941,6 +992,18 @@ impl Session for ModbusSession {
             self.in_flight = false;
             self.log.info("Verbindung beendet");
             return;
+        }
+        if self.reread && self.open && !self.in_flight {
+            self.reread = false;
+            if let (Some(func), Some(t)) = (self.table_func, &self.table) {
+                let (addr, qty) = match t {
+                    Table::Bits(a, b) => (*a, b.len() as u16),
+                    Table::Regs(a, r) => (*a, r.len() as u16),
+                };
+                if qty > 0 {
+                    self.request(Request { unit: self.s.unit, func, addr, qty, values: Vec::new() });
+                }
+            }
         }
         if self.s.poll && self.open {
             if !self.in_flight && self.last_poll.elapsed() >= Duration::from_millis(self.s.poll_ms) {
@@ -1037,5 +1100,40 @@ mod tests {
         let req = Request { unit: 1, func: Func::ReadHolding, addr: 0, qty: 3, values: vec![] };
         let r = transact(&mut p, 7, &req, Duration::from_secs(2), &|_| {}).unwrap();
         assert_eq!(r, Reply::Regs(vec![100, 101, 102]));
+    }
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn coil_write_updates_table_and_rereads() {
+        let mut m = ModbusSession::new("t".into());
+        m.table = Some(Table::Bits(0, vec![false; 8]));
+        m.table_func = Some(Func::ReadCoils);
+        m.apply_write(&Request { unit: 1, func: Func::WriteCoil, addr: 3, qty: 1, values: vec![1] });
+        match &m.table {
+            Some(Table::Bits(_, b)) => assert!(b[3]),
+            _ => panic!(),
+        }
+        assert!(m.reread);
+    }
+
+    #[test]
+    fn register_write_outside_table_is_ignored() {
+        let mut m = ModbusSession::new("t".into());
+        m.table = Some(Table::Regs(10, vec![0; 5]));
+        m.table_func = Some(Func::ReadHolding);
+        m.apply_write(&Request { unit: 1, func: Func::WriteRegisters, addr: 13, qty: 3, values: vec![7, 8, 9] });
+        match &m.table {
+            Some(Table::Regs(_, r)) => assert_eq!(r, &vec![0, 0, 0, 7, 8]),
+            _ => panic!(),
+        }
+        // input registers are not changed by a holding write
+        m.table_func = Some(Func::ReadInput);
+        m.reread = false;
+        m.apply_write(&Request { unit: 1, func: Func::WriteRegister, addr: 10, qty: 1, values: vec![5] });
+        assert!(!m.reread);
     }
 }
