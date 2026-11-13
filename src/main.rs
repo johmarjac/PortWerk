@@ -4,8 +4,11 @@ mod app;
 mod ascii;
 mod codec;
 mod link;
+mod modbus;
+mod project;
 mod rest;
 mod script;
+mod sessions;
 mod terminal;
 mod tools;
 
@@ -18,6 +21,19 @@ fn main() -> eframe::Result<()> {
     let shot = args.iter().position(|a| a == "--screenshot").map(|i| {
         PathBuf::from(args.get(i + 1).cloned().unwrap_or_else(|| "screenshot.png".into()))
     });
+    // a project file given on the command line (double click on a .portwerk file)
+    let mut open_file = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--screenshot" | "--tab" | "--mode" => i += 2,
+            a if a.starts_with("--") => i += 1,
+            a => {
+                open_file = Some(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(format!("{} {}", app::APP_NAME, app::APP_VERSION))
@@ -47,8 +63,8 @@ fn main() -> eframe::Result<()> {
         app::APP_NAME,
         options,
         Box::new(move |cc| {
-            let mut a = app::PortWerkApp::new(cc, shot);
-            // optional: --tab <serial|tcpc|tcps|udp|tools|info> [--mode lines|loop|script] [--ascii]
+            let mut a = app::PortWerkApp::new(cc, shot, open_file);
+            // optional: --tab <serial|tcpc|tcps|udp|modbus|rest|tools|info> [--mode lines|loop|script] [--ascii]
             let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
             a.apply_start_args(get("--tab").as_deref(), get("--mode").as_deref(), args.iter().any(|a| a == "--ascii"));
             Ok(Box::new(a))

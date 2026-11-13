@@ -1,13 +1,15 @@
 # PortWerk
 
-Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Server und UDP in einem Fenster vereint. Geschrieben in Rust mit [egui](https://github.com/emilk/egui).
+Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Server, UDP, Modbus und REST in einem Fenster vereint. Geschrieben in Rust mit [egui](https://github.com/emilk/egui).
 
 ## Funktionen
 
+- **Mehrere Sitzungen:** Jede Verbindungsart kann beliebig viele Sitzungen als Reiter haben. Sitzungen lassen sich öffnen, per Doppelklick umbenennen, duplizieren und schließen, und alle laufen gleichzeitig.
 - **Seriell:** Port, Baudrate, Datenbits, Parität, Stoppbits und Handshake einstellen. DTR, RTS und BREAK schalten, CTS, DSR, RI und CD beobachten.
 - **TCP-Client:** mit Geräten oder Diensten verbinden.
 - **TCP-Server:** mehrere Clients annehmen, an alle oder an einzelne senden, Clients trennen.
 - **UDP:** senden und empfangen, auch Broadcast und Antwort an den letzten Absender.
+- **Modbus RTU und TCP:** Coils, diskrete Eingänge, Holding- und Input-Register lesen (Funktionen 01–04) und schreiben (05, 06, 15, 16). Zyklische Abfrage, Anzeige als 16 oder 32 Bit, Float oder Text in beiden Wortreihenfolgen, Datenverkehr als Hex und Klartext-Meldungen bei Ausnahmen.
 - **REST-Client:** Anfragen mit GET, POST, PUT, PATCH, DELETE, HEAD und OPTIONS, mit Parametern, Headern, Body (JSON, Text, Formular) und Anmeldung (Bearer-Token, Benutzer + Passwort, API-Schlüssel). Dazu gespeicherte Anfragen, Variablen wie `{{baseUrl}}`, Verlauf, formatierte JSON-Antworten und Export als cURL-Befehl.
 - **Anzeige:** Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen. Dazu Echo, Pause, Speichern und laufende Mitschrift in eine Datei.
 - **Senden:**
@@ -16,6 +18,7 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
   - *Skript:* Lua-5.4-Skripte für Protokolle, also senden, warten, auf Antworten reagieren und Prüfsummen berechnen. Beispiele sind enthalten.
 - **ASCII-Tabelle:** Dezimal, Hex, Binär und Zeichen. Ein Klick fügt das Zeichen in die Sendezeile ein.
 - **Werkzeuge:** Umrechner für Text, Hex, Dezimal und Binär, Prüfsummen (Summe, XOR, CRC-8, CRC-16 Modbus/CCITT, CRC-32) und ein Zahlenumrechner.
+- **Projektdateien (`.portwerk`):** Alle Sitzungen, Sendezeilen, Skripte, Modbus- und REST-Einstellungen lassen sich in einer Datei speichern und weitergeben. Ein Doppelklick auf die Datei öffnet PortWerk mit dem Projekt: Der Windows-Installer und das Linux-Paket registrieren die Dateiendung, und die portable Version kann das über *Projekt → .portwerk-Dateien mit PortWerk öffnen* selbst erledigen. Projektdateien lassen sich auch einfach ins Fenster ziehen.
 - Alle Einstellungen werden beim Beenden gespeichert.
 
 ## Skript-Befehle (Lua)

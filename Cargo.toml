@@ -39,5 +39,6 @@ depends = "$auto"
 assets = [
     ["target/release/portwerk", "usr/bin/", "755"],
     ["packaging/linux/portwerk.desktop", "usr/share/applications/", "644"],
+    ["packaging/linux/portwerk-mime.xml", "usr/share/mime/packages/portwerk.xml", "644"],
     ["README.md", "usr/share/doc/portwerk/README.md", "644"],
 ]

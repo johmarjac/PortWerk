@@ -21,6 +21,12 @@
       <Directory Id="INSTALLFOLDER" Name="PortWerk">
         <Component Id="MainExecutable">
           <File Id="PortWerkExe" Source="$(var.BinPath)" Name="PortWerk.exe" KeyPath="yes" />
+          <!-- *.portwerk project files open with PortWerk on double click -->
+          <ProgId Id="PortWerk.Project" Description="PortWerk-Projekt" Icon="PortWerkExe" IconIndex="0" Advertise="no">
+            <Extension Id="portwerk" ContentType="application/x-portwerk">
+              <Verb Id="open" Command="Öffnen" TargetFile="PortWerkExe" Argument="&quot;%1&quot;" />
+            </Extension>
+          </ProgId>
         </Component>
       </Directory>
     </StandardDirectory>
