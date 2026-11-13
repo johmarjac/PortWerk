@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -119,6 +119,11 @@ pub enum MqCmd {
     Unsubscribe(String),
     Publish { topic: String, payload: Vec<u8>, qos: u8, retain: bool },
     Close,
+    // internal: reported by the network thread
+    #[doc(hidden)]
+    ConnAck,
+    #[doc(hidden)]
+    ConnLost,
 }
 
 enum MqEvent {
@@ -158,47 +163,173 @@ struct ConnCfg {
     subs: Vec<(String, u8)>,
 }
 
+/// Two threads per connection:
+/// * the network thread drives the MQTT event loop with blocking calls, so a
+///   connection attempt is never interrupted half-way (remote brokers need
+///   a few hundred milliseconds, TLS more);
+/// * the command thread turns subscribe/publish/close into client requests.
 fn spawn(ctx: &egui::Context, cfg: ConnCfg) -> MqLink {
-    let (cmd_tx, cmd_rx) = channel();
+    let (cmd_tx, cmd_rx) = channel::<MqCmd>();
     let (ev_tx, ev_rx) = channel();
-    let ctx = ctx.clone();
-    thread::spawn(move || {
-        let out = |e: MqEvent| {
+    let out = {
+        let ctx = ctx.clone();
+        move |e: MqEvent| {
             let _ = ev_tx.send(e);
             ctx.request_repaint();
-        };
-        let mut opts = MqttOptions::new(cfg.client_id.clone(), cfg.host.trim(), cfg.port);
-        opts.set_keep_alive(Duration::from_secs(cfg.keep_alive_s.max(5) as u64));
-        opts.set_clean_session(cfg.clean_session);
-        opts.set_max_packet_size(16 * 1024 * 1024, 16 * 1024 * 1024);
-        if !cfg.user.is_empty() {
-            opts.set_credentials(cfg.user.clone(), cfg.password.clone());
         }
-        if cfg.tls {
-            match tls::config(cfg.insecure, &cfg.ca_file) {
-                Ok(c) => {
-                    opts.set_transport(Transport::tls_with_config(TlsConfiguration::Rustls(Arc::new(c))));
-                }
-                Err(e) => {
-                    out(MqEvent::Error(e));
-                    out(MqEvent::Closed);
-                    return;
-                }
+    };
+
+    let tls_cfg = if cfg.tls {
+        match tls::config(cfg.insecure, &cfg.ca_file) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(e) => {
+                out(MqEvent::Error(e));
+                out(MqEvent::Closed);
+                return MqLink { tx: cmd_tx, rx: ev_rx };
             }
         }
-        out(MqEvent::Info(format!(
-            "Verbinde mit {}:{}{} …",
-            cfg.host.trim(),
-            cfg.port,
-            if cfg.tls { " (TLS)" } else { "" }
-        )));
-        let (client, mut conn) = Client::new(opts, 256);
-        let mut subs = cfg.subs.clone();
-        let mut connected = false;
-        loop {
+    } else {
+        None
+    };
+    // options for a given address (host name, or an IP picked by `fastest_address`)
+    let make_opts = {
+        let cfg = cfg.clone();
+        move |host: &str| {
+            let mut o = MqttOptions::new(cfg.client_id.clone(), host, cfg.port);
+            o.set_keep_alive(Duration::from_secs(cfg.keep_alive_s.max(5) as u64));
+            o.set_clean_session(cfg.clean_session);
+            o.set_max_packet_size(16 * 1024 * 1024, 16 * 1024 * 1024);
+            if !cfg.user.is_empty() {
+                o.set_credentials(cfg.user.clone(), cfg.password.clone());
+            }
+            if let Some(c) = &tls_cfg {
+                o.set_transport(Transport::tls_with_config(TlsConfiguration::Rustls(c.clone())));
+            }
+            o
+        }
+    };
+    let opts = make_opts(cfg.host.trim());
+    out(MqEvent::Info(format!(
+        "Verbinde mit {}:{}{} …",
+        cfg.host.trim(),
+        cfg.port,
+        if cfg.tls { " (TLS)" } else { "" }
+    )));
+    let (client, mut conn) = Client::new(opts, 256);
+    let mut net = rumqttc::NetworkOptions::new();
+    // some public brokers take up to ~8 s to confirm a login under load
+    net.set_connection_timeout(15);
+    conn.eventloop.set_network_options(net);
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // ---- network thread
+    {
+        let out = out.clone();
+        let stop = stop.clone();
+        let internal = cmd_tx.clone();
+        let auto = cfg.auto_reconnect;
+        let host = cfg.host.trim().to_string();
+        let (port, tls) = (cfg.port, cfg.tls);
+        thread::spawn(move || {
+            let mut connected = false;
+            // Without TLS: pick the fastest reachable address first, so unreachable
+            // IPv6 addresses don't cost seconds. With TLS the host name must stay
+            // (certificate check), so the library tries the addresses itself.
+            let pick_address = |conn: &mut rumqttc::Connection| {
+                if tls {
+                    return;
+                }
+                if let Some(ip) = fastest_address(&host, port) {
+                    if ip.to_string() != host {
+                        out(MqEvent::Info(format!("Schnellste Adresse von {host}: {ip}")));
+                    }
+                    conn.eventloop.mqtt_options = make_opts(&ip.to_string());
+                }
+            };
+            pick_address(&mut conn);
             loop {
-                match cmd_rx.try_recv() {
-                    Ok(MqCmd::Subscribe(t, q)) => {
+                let ev = match conn.recv() {
+                    Ok(ev) => ev,
+                    Err(_) => break, // all requests done: closed by the command thread
+                };
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                match ev {
+                    Ok(Event::Incoming(Packet::ConnAck(ack))) => {
+                        connected = true;
+                        out(MqEvent::Connected);
+                        if ack.session_present {
+                            out(MqEvent::Info("Broker hat die bisherige Sitzung fortgesetzt".into()));
+                        }
+                        let _ = internal.send(MqCmd::ConnAck);
+                    }
+                    Ok(Event::Incoming(Packet::Publish(p))) => out(MqEvent::Message {
+                        topic: p.topic.clone(),
+                        payload: p.payload.to_vec(),
+                        qos: qos_num(p.qos),
+                        retain: p.retain,
+                    }),
+                    Ok(Event::Incoming(Packet::SubAck(a))) => {
+                        let failed =
+                            a.return_codes.iter().filter(|c| matches!(c, rumqttc::SubscribeReasonCode::Failure)).count();
+                        if failed > 0 {
+                            out(MqEvent::Error(format!("Broker hat {failed} Abo(s) abgelehnt (keine Berechtigung?)")));
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        let msg = describe(&e);
+                        if connected {
+                            connected = false;
+                            out(MqEvent::Disconnected(msg));
+                            let _ = internal.send(MqCmd::ConnLost);
+                        } else {
+                            out(MqEvent::Error(format!("Verbindung fehlgeschlagen: {msg}")));
+                        }
+                        if !auto {
+                            stop.store(true, Ordering::Relaxed);
+                            let _ = internal.send(MqCmd::Close);
+                            break;
+                        }
+                        // pause before the next attempt; stop quickly when closed
+                        for _ in 0..30 {
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        out(MqEvent::Info("Neuer Verbindungsversuch …".into()));
+                        pick_address(&mut conn);
+                    }
+                }
+            }
+            out(MqEvent::Closed);
+        });
+    }
+
+    // ---- command thread
+    {
+        let subs0 = cfg.subs.clone();
+        thread::spawn(move || {
+            let mut subs = subs0;
+            let mut connected = false;
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    MqCmd::ConnAck => {
+                        connected = true;
+                        for (t, q) in &subs {
+                            if let Err(e) = client.try_subscribe(t.clone(), qos(*q)) {
+                                out(MqEvent::Error(format!("Abonnieren von {t} fehlgeschlagen: {e}")));
+                            }
+                        }
+                    }
+                    MqCmd::ConnLost => connected = false,
+                    MqCmd::Subscribe(t, q) => {
                         subs.retain(|(x, _)| *x != t);
                         subs.push((t.clone(), q));
                         if connected {
@@ -207,93 +338,76 @@ fn spawn(ctx: &egui::Context, cfg: ConnCfg) -> MqLink {
                             }
                         }
                     }
-                    Ok(MqCmd::Unsubscribe(t)) => {
+                    MqCmd::Unsubscribe(t) => {
                         subs.retain(|(x, _)| *x != t);
                         if connected {
                             let _ = client.try_unsubscribe(t);
                         }
                     }
-                    Ok(MqCmd::Publish { topic, payload, qos: q, retain }) => {
+                    MqCmd::Publish { topic, payload, qos: q, retain } => {
+                        if !connected {
+                            out(MqEvent::Error("Nicht verbunden – nichts veröffentlicht".into()));
+                            continue;
+                        }
                         match client.try_publish(topic.clone(), qos(q), retain, payload.clone()) {
                             Ok(()) => out(MqEvent::Sent { topic, payload, qos: q, retain }),
                             Err(e) => out(MqEvent::Error(format!("Veröffentlichen fehlgeschlagen: {e}"))),
                         }
                     }
-                    Ok(MqCmd::Close) | Err(TryRecvError::Disconnected) => {
-                        let _ = client.try_disconnect();
-                        for _ in 0..10 {
-                            if !matches!(conn.recv_timeout(Duration::from_millis(50)), Ok(Ok(_))) {
-                                break;
-                            }
-                        }
-                        out(MqEvent::Closed);
-                        return;
-                    }
-                    Err(TryRecvError::Empty) => break,
+                    MqCmd::Close => break,
                 }
             }
-            match conn.recv_timeout(Duration::from_millis(50)) {
-                Ok(Ok(Event::Incoming(Packet::ConnAck(ack)))) => {
-                    connected = true;
-                    out(MqEvent::Connected);
-                    if ack.session_present {
-                        out(MqEvent::Info("Broker hat die bisherige Sitzung fortgesetzt".into()));
-                    }
-                    for (t, q) in &subs {
-                        if let Err(e) = client.try_subscribe(t.clone(), qos(*q)) {
-                            out(MqEvent::Error(format!("Abonnieren von {t} fehlgeschlagen: {e}")));
-                        }
-                    }
-                }
-                Ok(Ok(Event::Incoming(Packet::Publish(p)))) => out(MqEvent::Message {
-                    topic: p.topic.clone(),
-                    payload: p.payload.to_vec(),
-                    qos: qos_num(p.qos),
-                    retain: p.retain,
-                }),
-                Ok(Ok(Event::Incoming(Packet::SubAck(a)))) => {
-                    let failed = a.return_codes.iter().filter(|c| matches!(c, rumqttc::SubscribeReasonCode::Failure)).count();
-                    if failed > 0 {
-                        out(MqEvent::Error(format!("Broker hat {failed} Abo(s) abgelehnt (keine Berechtigung?)")));
-                    }
-                }
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    let msg = format!("{e}");
-                    if connected {
-                        connected = false;
-                        out(MqEvent::Disconnected(msg));
-                    } else {
-                        out(MqEvent::Error(format!("Verbindung fehlgeschlagen: {msg}")));
-                    }
-                    if !cfg.auto_reconnect {
-                        out(MqEvent::Closed);
-                        return;
-                    }
-                    // wait before the next attempt, but react to "close" at once
-                    match cmd_rx.recv_timeout(Duration::from_secs(3)) {
-                        Ok(MqCmd::Close) | Err(RecvTimeoutError::Disconnected) => {
-                            out(MqEvent::Closed);
-                            return;
-                        }
-                        Ok(MqCmd::Subscribe(t, q)) => {
-                            subs.retain(|(x, _)| *x != t);
-                            subs.push((t, q));
-                        }
-                        Ok(MqCmd::Unsubscribe(t)) => subs.retain(|(x, _)| *x != t),
-                        _ => {}
-                    }
-                    out(MqEvent::Info("Neuer Verbindungsversuch …".into()));
-                }
-                Err(rumqttc::RecvTimeoutError::Timeout) => {}
-                Err(rumqttc::RecvTimeoutError::Disconnected) => {
-                    out(MqEvent::Closed);
-                    return;
-                }
+            stop.store(true, Ordering::Relaxed);
+            if connected {
+                let _ = client.try_disconnect();
             }
-        }
-    });
+            // dropping the client ends the network thread's event loop
+            drop(client);
+        });
+    }
     MqLink { tx: cmd_tx, rx: ev_rx }
+}
+
+/// Try all addresses of `host` at the same time and return the first one
+/// that accepts a TCP connection ("happy eyeballs"). None if none answers
+/// within 5 s or the name can't be resolved.
+fn fastest_address(host: &str, port: u16) -> Option<std::net::IpAddr> {
+    use std::net::ToSocketAddrs;
+    let addrs: Vec<std::net::SocketAddr> = (host, port).to_socket_addrs().ok()?.collect();
+    match addrs.len() {
+        0 => return None,
+        1 => return Some(addrs[0].ip()),
+        _ => {}
+    }
+    let (tx, rx) = channel();
+    for a in addrs {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            if std::net::TcpStream::connect_timeout(&a, Duration::from_secs(5)).is_ok() {
+                let _ = tx.send(a.ip());
+            }
+        });
+    }
+    drop(tx);
+    rx.recv_timeout(Duration::from_secs(5)).ok()
+}
+
+/// Readable German text for common connection errors.
+fn describe(e: &rumqttc::ConnectionError) -> String {
+    use rumqttc::ConnectionError as E;
+    match e {
+        E::NetworkTimeout => "Zeitüberschreitung (Broker nicht erreichbar?)".into(),
+        E::FlushTimeout => "Zeitüberschreitung beim Senden".into(),
+        E::ConnectionRefused(code) => format!("Broker lehnt ab: {code:?} (Benutzer/Passwort oder Client-ID prüfen)"),
+        E::Io(io) => match io.kind() {
+            std::io::ErrorKind::ConnectionRefused => "Port geschlossen (läuft dort ein Broker?)".into(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted => {
+                "Verbindung von der Gegenstelle getrennt".into()
+            }
+            _ => format!("Netzwerkfehler: {io}"),
+        },
+        other => format!("{other}"),
+    }
 }
 
 // ------------------------------------------------------------------ registry for scripts
@@ -1335,5 +1449,52 @@ mod clear_tests {
         assert!(m.s.filter.is_empty());
         assert_eq!(m.messages.len(), 1, "die Nachrichtenliste bleibt");
         m.stop();
+    }
+}
+
+/// Real public brokers – run by hand: cargo test public_brokers -- --ignored --nocapture
+#[cfg(test)]
+mod public_brokers {
+    use super::*;
+
+    fn time_to_connect(host: &str, port: u16, tls: bool) -> Option<Duration> {
+        let ctx = egui::Context::default();
+        let mut m = MqttSession::new("t".into());
+        m.s.host = host.into();
+        m.s.port = port;
+        m.s.tls = tls;
+        let start = Instant::now();
+        m.connect(&ctx);
+        while start.elapsed() < Duration::from_secs(20) {
+            m.pump(&ctx);
+            if m.connected {
+                let t = start.elapsed();
+                m.stop();
+                return Some(t);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        for (_, e, _) in &m.events {
+            println!("    {e}");
+        }
+        m.stop();
+        None
+    }
+
+    #[test]
+    #[ignore]
+    fn public_brokers() {
+        for (host, port, tls) in [
+            ("broker.hivemq.com", 1883, false),
+            ("test.mosquitto.org", 1883, false),
+            ("broker.emqx.io", 1883, false),
+            ("broker.emqx.io", 8883, true),
+            ("test.mosquitto.org", 8886, true),
+        ] {
+            match time_to_connect(host, port, tls) {
+                Some(t) => println!("{host}:{port} verbunden nach {} ms", t.as_millis()),
+                None => println!("{host}:{port} NICHT verbunden (20 s)"),
+            }
+        }
     }
 }
