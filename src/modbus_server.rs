@@ -508,7 +508,7 @@ impl ModbusServerSession {
         let mut kick = None;
         for c in &self.clients {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("●").color(GREEN));
+                crate::sessions::led(ui, GREEN);
                 ui.label(c);
                 if ui.small_button("✖").on_hover_text("Verbindung trennen").clicked() {
                     kick = Some(c.clone());

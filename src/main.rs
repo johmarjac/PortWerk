@@ -3,6 +3,7 @@
 mod app;
 mod ascii;
 mod codec;
+mod glyph_check;
 mod link;
 mod modbus;
 mod modbus_server;

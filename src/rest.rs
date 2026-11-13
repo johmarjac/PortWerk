@@ -532,7 +532,7 @@ impl RestClient {
                 self.s.requests.push(RestRequest::default());
                 self.s.selected = self.s.requests.len() - 1;
             }
-            if ui.button("⧉").on_hover_text("Duplizieren").clicked() {
+            if ui.button("🗐").on_hover_text("Duplizieren").clicked() {
                 let mut c = self.current().clone();
                 c.name.push_str(" (Kopie)");
                 self.s.requests.insert(self.s.selected + 1, c);

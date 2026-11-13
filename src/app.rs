@@ -43,7 +43,7 @@ impl Tab {
             Tab::Modbus => "🏭 Modbus-Client",
             Tab::ModbusServer => "🏭 Modbus-Server",
             Tab::Rest => "🌐 REST",
-            Tab::Tools => "🧮 Werkzeuge",
+            Tab::Tools => "🔧 Werkzeuge",
             Tab::About => "ℹ Info",
         }
     }
@@ -589,7 +589,7 @@ fn status_group<T: Session>(ui: &mut Ui, label: &str, g: &Group<T>) {
     let col = if open > 0 { Color32::from_rgb(30, 160, 70) } else { Color32::from_gray(150) };
     let r = ui
         .horizontal(|ui| {
-            ui.label(RichText::new("●").color(col));
+            crate::sessions::led(ui, col);
             ui.label(RichText::new(format!("{label} {open}/{total}")).size(12.5));
         })
         .response;

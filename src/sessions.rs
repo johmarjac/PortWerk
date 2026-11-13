@@ -123,7 +123,7 @@ impl<T: Session> Group<T> {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let col = if s.is_open() { GREEN } else { Color32::from_gray(160) };
-                                    ui.label(RichText::new("●").color(col).size(11.0));
+                                    led(ui, col);
                                     if self.rename == Some(i) {
                                         let r = ui.add(egui::TextEdit::singleline(&mut self.rename_buf).desired_width(130.0));
                                         if self.rename_focus {
@@ -159,7 +159,7 @@ impl<T: Session> Group<T> {
                                                 self.rename_focus = true;
                                                 ui.close();
                                             }
-                                            if ui.button("⧉ Duplizieren").clicked() {
+                                            if ui.button("🗐 Duplizieren").clicked() {
                                                 act = Some(Act::Duplicate(i));
                                                 ui.close();
                                             }
@@ -1057,7 +1057,7 @@ pub fn status_line(ui: &mut Ui, open: bool, starting: bool, on: &str, off: &str)
         (off, Color32::GRAY)
     };
     ui.horizontal(|ui| {
-        ui.label(RichText::new("●").color(col));
+        led(ui, col);
         ui.label(RichText::new(txt).color(col));
     });
 }
@@ -1070,11 +1070,17 @@ fn lamp(ui: &mut Ui, name: &str, on: bool, enabled: bool) {
     } else {
         RED
     };
-    ui.label(RichText::new("●").color(col));
+    led(ui, col);
     ui.label(RichText::new(name).small()).on_hover_text(match name {
         "CTS" => "Clear To Send",
         "DSR" => "Data Set Ready",
         "RI" => "Ring Indicator",
         _ => "Carrier Detect",
     });
+}
+
+/// A round status light (drawn, so it looks the same with every font).
+pub fn led(ui: &mut Ui, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.5, color);
 }

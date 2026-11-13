@@ -804,7 +804,7 @@ impl ModbusSession {
                 let hint = if self.s.write_func.is_bits() { "1 0 1 oder an aus" } else { "z. B. 100, 0x1F, -5" };
                 ui.add(egui::TextEdit::singleline(&mut self.s.write_values).hint_text(hint).desired_width(200.0))
                     .on_hover_text("Mehrere Werte mit Komma oder Leerzeichen trennen. Bei Funktion 05/06 zählt nur der erste.");
-                if ui.add_enabled(connected && !self.in_flight, egui::Button::new("✎ Schreiben")).clicked() {
+                if ui.add_enabled(connected && !self.in_flight, egui::Button::new("✏ Schreiben")).clicked() {
                     match parse_values(&self.s.write_values, self.s.write_func.is_bits()) {
                         Ok(values) if !values.is_empty() => {
                             let req = Request {
@@ -887,7 +887,7 @@ impl ModbusSession {
                                 ui.monospace(a.to_string());
                                 ui.monospace(RichText::new(v).strong());
                                 ui.monospace(RichText::new(raw).weak());
-                                if is_holding && ui.small_button("✎").on_hover_text("Dieses Register schreiben").clicked() {
+                                if is_holding && ui.small_button("✏").on_hover_text("Dieses Register schreiben").clicked() {
                                     edit_reg = Some(a);
                                 }
                                 ui.end_row();
