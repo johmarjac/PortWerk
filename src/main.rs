@@ -5,6 +5,7 @@ mod ascii;
 mod codec;
 mod link;
 mod modbus;
+mod modbus_server;
 mod project;
 mod rest;
 mod script;

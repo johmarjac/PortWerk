@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::ascii::AsciiTable;
 use crate::link;
 use crate::modbus::{ModbusSaved, ModbusSession};
+use crate::modbus_server::{ModbusServerSaved, ModbusServerSession};
 use crate::project;
 use crate::rest::{RestClient, RestSettings};
 use crate::sessions::{
@@ -26,6 +27,7 @@ pub enum Tab {
     TcpServer,
     Udp,
     Modbus,
+    ModbusServer,
     Rest,
     Tools,
     About,
@@ -38,14 +40,24 @@ impl Tab {
             Tab::TcpClient => "🔗 TCP-Client",
             Tab::TcpServer => "🗄 TCP-Server",
             Tab::Udp => "📡 UDP",
-            Tab::Modbus => "🏭 Modbus",
+            Tab::Modbus => "🏭 Modbus-Client",
+            Tab::ModbusServer => "🏭 Modbus-Server",
             Tab::Rest => "🌐 REST",
             Tab::Tools => "🧮 Werkzeuge",
             Tab::About => "ℹ Info",
         }
     }
-    const ALL: [Tab; 8] =
-        [Tab::Serial, Tab::TcpClient, Tab::TcpServer, Tab::Udp, Tab::Modbus, Tab::Rest, Tab::Tools, Tab::About];
+    const ALL: [Tab; 9] = [
+        Tab::Serial,
+        Tab::TcpClient,
+        Tab::TcpServer,
+        Tab::Udp,
+        Tab::Modbus,
+        Tab::ModbusServer,
+        Tab::Rest,
+        Tab::Tools,
+        Tab::About,
+    ];
 }
 
 /// Everything that is remembered between starts and stored in project files.
@@ -64,6 +76,8 @@ pub struct Saved {
     pub udp_active: usize,
     pub modbus_sessions: Vec<ModbusSaved>,
     pub modbus_active: usize,
+    pub modbus_server_sessions: Vec<ModbusServerSaved>,
+    pub modbus_server_active: usize,
     pub rest: RestSettings,
 }
 
@@ -82,6 +96,8 @@ impl Default for Saved {
             udp_active: 0,
             modbus_sessions: vec![ModbusSaved::default()],
             modbus_active: 0,
+            modbus_server_sessions: vec![ModbusServerSaved::default()],
+            modbus_server_active: 0,
             rest: RestSettings::default(),
         }
     }
@@ -104,6 +120,7 @@ pub struct PortWerkApp {
     tcps: Group<TcpServerSession>,
     udp: Group<UdpSession>,
     modbus: Group<ModbusSession>,
+    mbserver: Group<ModbusServerSession>,
     rest: RestClient,
     tools: Tools,
     ascii: AsciiTable,
@@ -133,6 +150,7 @@ impl PortWerkApp {
             tcps: Group::new(Vec::new(), 0),
             udp: Group::new(Vec::new(), 0),
             modbus: Group::new(Vec::new(), 0),
+            mbserver: Group::new(Vec::new(), 0),
             rest: RestClient::new(RestSettings::default()),
             tools: Tools::default(),
             ascii: AsciiTable::default(),
@@ -161,6 +179,10 @@ impl PortWerkApp {
         self.tcps = Group::new(s.tcps_sessions.into_iter().map(TcpServerSession::from_saved).collect(), s.tcps_active);
         self.udp = Group::new(s.udp_sessions.into_iter().map(UdpSession::from_saved).collect(), s.udp_active);
         self.modbus = Group::new(s.modbus_sessions.into_iter().map(ModbusSession::from_saved).collect(), s.modbus_active);
+        self.mbserver = Group::new(
+            s.modbus_server_sessions.into_iter().map(ModbusServerSession::from_saved).collect(),
+            s.modbus_server_active,
+        );
         self.rest = RestClient::new(s.rest);
     }
 
@@ -178,6 +200,8 @@ impl PortWerkApp {
             udp_active: self.udp.active,
             modbus_sessions: self.modbus.items.iter().map(|s| s.saved()).collect(),
             modbus_active: self.modbus.active,
+            modbus_server_sessions: self.mbserver.items.iter().map(|s| s.saved()).collect(),
+            modbus_server_active: self.mbserver.active,
             rest: self.rest.s.clone(),
         }
     }
@@ -188,6 +212,7 @@ impl PortWerkApp {
         self.tcps.stop_all();
         self.udp.stop_all();
         self.modbus.stop_all();
+        self.mbserver.stop_all();
     }
 
     fn notify(&mut self, msg: impl Into<String>, ok: bool) {
@@ -291,6 +316,7 @@ impl PortWerkApp {
                 "tcps" => Tab::TcpServer,
                 "udp" => Tab::Udp,
                 "modbus" => Tab::Modbus,
+                "mbserver" => Tab::ModbusServer,
                 "rest" => Tab::Rest,
                 "tools" => Tab::Tools,
                 "info" => Tab::About,
@@ -331,6 +357,7 @@ impl PortWerkApp {
             Tab::TcpServer => (self.tcps.open_count(), self.tcps.any_busy()),
             Tab::Udp => (self.udp.open_count(), self.udp.any_busy()),
             Tab::Modbus => (self.modbus.open_count(), self.modbus.any_busy()),
+            Tab::ModbusServer => (self.mbserver.open_count(), self.mbserver.any_busy()),
             Tab::Rest => (0, self.rest.busy()),
             _ => (0, false),
         }
@@ -349,7 +376,8 @@ impl PortWerkApp {
                     "Als TCP-Client mit Geräten oder Diensten verbinden",
                     "Als TCP-Server mehrere Clients annehmen, an alle oder einzelne senden, Clients trennen",
                     "UDP-Pakete senden und empfangen, auch Broadcast und Antwort an den letzten Absender",
-                    "Modbus RTU und TCP: Coils, Eingänge und Register lesen und schreiben, zyklisch abfragen, Werte als 16/32 Bit, Float oder Text, Datenverkehr als Hex",
+                    "Modbus-Client RTU und TCP: Coils, Eingänge und Register lesen und schreiben, zyklisch abfragen, Werte als 16/32 Bit, Float oder Text, Datenverkehr als Hex",
+                    "Modbus-TCP-Server (Geräte-Simulator): Werte in einer Tabelle bearbeiten, mehrere Clients gleichzeitig, Werte automatisch hochzählen oder zufällig ändern",
                     "REST-Client: GET/POST/PUT/PATCH/DELETE, Parameter, Header, JSON/Text/Formular-Body, Anmeldung, Variablen wie {{baseUrl}}, Verlauf, cURL-Export",
                     "Projektdateien (.portwerk): alle Sitzungen und Einstellungen speichern und an Kollegen weitergeben – Doppelklick öffnet PortWerk",
                     "Anzeige als Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen",
@@ -392,6 +420,7 @@ impl eframe::App for PortWerkApp {
         self.tcps.pump(&ctx);
         self.udp.pump(&ctx);
         self.modbus.pump(&ctx);
+        self.mbserver.pump(&ctx);
 
         // shortcuts
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
@@ -465,7 +494,8 @@ impl eframe::App for PortWerkApp {
                     status_group(ui, "TCP-Client", &self.tcpc);
                     status_group(ui, "TCP-Server", &self.tcps);
                     status_group(ui, "UDP", &self.udp);
-                    status_group(ui, "Modbus", &self.modbus);
+                    status_group(ui, "Modbus-Client", &self.modbus);
+                    status_group(ui, "Modbus-Server", &self.mbserver);
                     if let Some((msg, ok, at)) = &self.notice {
                         if at.elapsed() < Duration::from_secs(8) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -491,6 +521,10 @@ impl eframe::App for PortWerkApp {
                 self.udp.ui(ui, "UDP", shared, move |n| UdpSession::new(n, next))
             }
             Tab::Modbus => self.modbus.ui(ui, "Modbus", shared, ModbusSession::new),
+            Tab::ModbusServer => {
+                let next = self.mbserver.items.iter().map(|s| s.port()).max().map_or(502, |p| p.saturating_add(1));
+                self.mbserver.ui(ui, "Modbus-Server", shared, move |n| ModbusServerSession::new(n, next))
+            }
             Tab::Rest => self.rest.ui(ui),
             Tab::Tools => self.tools.ui(ui),
             Tab::About => self.about_tab(ui),

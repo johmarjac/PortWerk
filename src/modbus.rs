@@ -430,7 +430,7 @@ pub enum Format {
 }
 
 impl Format {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Format::Unsigned => "16 Bit ohne Vorzeichen",
             Format::Signed => "16 Bit mit Vorzeichen",
@@ -445,10 +445,10 @@ impl Format {
             Format::Ascii => "Text (2 Zeichen je Register)",
         }
     }
-    fn wide(self) -> bool {
+    pub fn wide(self) -> bool {
         matches!(self, Format::U32Be | Format::U32Le | Format::I32Be | Format::I32Le | Format::F32Be | Format::F32Le)
     }
-    const ALL: [Format; 11] = [
+    pub const ALL: [Format; 11] = [
         Format::Unsigned,
         Format::Signed,
         Format::Hex,
@@ -464,7 +464,7 @@ impl Format {
 }
 
 /// One display row: (address, formatted value, raw hex).
-fn format_regs(start: u16, regs: &[u16], f: Format) -> Vec<(u16, String, String)> {
+pub fn format_regs(start: u16, regs: &[u16], f: Format) -> Vec<(u16, String, String)> {
     let mut rows = Vec::new();
     if f.wide() {
         for (i, pair) in regs.chunks(2).enumerate() {
@@ -505,7 +505,7 @@ fn format_regs(start: u16, regs: &[u16], f: Format) -> Vec<(u16, String, String)
 }
 
 /// Parse "1, 2 0x10 -5" (registers) or "1 0 an aus" (coils).
-fn parse_values(s: &str, bits: bool) -> Result<Vec<u16>, String> {
+pub fn parse_values(s: &str, bits: bool) -> Result<Vec<u16>, String> {
     s.split(|c: char| c == ',' || c == ';' || c.is_whitespace())
         .filter(|t| !t.is_empty())
         .map(|t| {

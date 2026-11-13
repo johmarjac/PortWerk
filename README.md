@@ -9,7 +9,8 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 - **TCP-Client:** mit Geräten oder Diensten verbinden.
 - **TCP-Server:** mehrere Clients annehmen, an alle oder an einzelne senden, Clients trennen.
 - **UDP:** senden und empfangen, auch Broadcast und Antwort an den letzten Absender.
-- **Modbus RTU und TCP:** Coils, diskrete Eingänge, Holding- und Input-Register lesen (Funktionen 01–04) und schreiben (05, 06, 15, 16). Zyklische Abfrage, Anzeige als 16 oder 32 Bit, Float oder Text in beiden Wortreihenfolgen, Datenverkehr als Hex und Klartext-Meldungen bei Ausnahmen.
+- **Modbus-Client RTU und TCP:** Coils, diskrete Eingänge, Holding- und Input-Register lesen (Funktionen 01–04) und schreiben (05, 06, 15, 16). Zyklische Abfrage, Anzeige als 16 oder 32 Bit, Float oder Text in beiden Wortreihenfolgen, Datenverkehr als Hex und Klartext-Meldungen bei Ausnahmen.
+- **Modbus-TCP-Server (Geräte-Simulator):** Coils, diskrete Eingänge, Holding- und Input-Register in einer Tabelle bearbeiten, mehrere Clients gleichzeitig bedienen, auf Wunsch nur eine Geräteadresse beantworten, Werte automatisch hochzählen oder zufällig ändern. Alle Anfragen werden im Klartext und als Hex protokolliert. Die Werte werden im Projekt mitgespeichert.
 - **REST-Client:** Anfragen mit GET, POST, PUT, PATCH, DELETE, HEAD und OPTIONS, mit Parametern, Headern, Body (JSON, Text, Formular) und Anmeldung (Bearer-Token, Benutzer + Passwort, API-Schlüssel). Dazu gespeicherte Anfragen, Variablen wie `{{baseUrl}}`, Verlauf, formatierte JSON-Antworten und Export als cURL-Befehl.
 - **Anzeige:** Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen. Dazu Echo, Pause, Speichern und laufende Mitschrift in eine Datei.
 - **Senden:**
