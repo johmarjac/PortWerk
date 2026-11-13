@@ -16,6 +16,9 @@ mlua = { version = "0.12.2", features = ["lua54", "vendored"] }
 ureq = "3.5.2"
 serde_json = "1.0.154"
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 winit = "0.30"

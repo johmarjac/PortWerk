@@ -8,6 +8,7 @@ use crate::ascii::AsciiTable;
 use crate::link;
 use crate::modbus::{ModbusSaved, ModbusSession};
 use crate::modbus_server::{ModbusServerSaved, ModbusServerSession};
+use crate::mqtt::{MqttSaved, MqttSession};
 use crate::project;
 use crate::rest::{RestClient, RestSettings};
 use crate::sessions::{
@@ -28,6 +29,7 @@ pub enum Tab {
     Udp,
     Modbus,
     ModbusServer,
+    Mqtt,
     Rest,
     Tools,
     About,
@@ -42,18 +44,20 @@ impl Tab {
             Tab::Udp => "📡 UDP",
             Tab::Modbus => "🏭 Modbus-Client",
             Tab::ModbusServer => "🏭 Modbus-Server",
+            Tab::Mqtt => "📶 MQTT",
             Tab::Rest => "🌐 REST",
             Tab::Tools => "🔧 Werkzeuge",
             Tab::About => "ℹ Info",
         }
     }
-    const ALL: [Tab; 9] = [
+    const ALL: [Tab; 10] = [
         Tab::Serial,
         Tab::TcpClient,
         Tab::TcpServer,
         Tab::Udp,
         Tab::Modbus,
         Tab::ModbusServer,
+        Tab::Mqtt,
         Tab::Rest,
         Tab::Tools,
         Tab::About,
@@ -78,6 +82,8 @@ pub struct Saved {
     pub modbus_active: usize,
     pub modbus_server_sessions: Vec<ModbusServerSaved>,
     pub modbus_server_active: usize,
+    pub mqtt_sessions: Vec<MqttSaved>,
+    pub mqtt_active: usize,
     pub rest: RestSettings,
 }
 
@@ -98,6 +104,8 @@ impl Default for Saved {
             modbus_active: 0,
             modbus_server_sessions: vec![ModbusServerSaved::default()],
             modbus_server_active: 0,
+            mqtt_sessions: vec![MqttSaved::default()],
+            mqtt_active: 0,
             rest: RestSettings::default(),
         }
     }
@@ -121,6 +129,7 @@ pub struct PortWerkApp {
     udp: Group<UdpSession>,
     modbus: Group<ModbusSession>,
     mbserver: Group<ModbusServerSession>,
+    mqtt: Group<MqttSession>,
     rest: RestClient,
     tools: Tools,
     ascii: AsciiTable,
@@ -151,6 +160,7 @@ impl PortWerkApp {
             udp: Group::new(Vec::new(), 0),
             modbus: Group::new(Vec::new(), 0),
             mbserver: Group::new(Vec::new(), 0),
+            mqtt: Group::new(Vec::new(), 0),
             rest: RestClient::new(RestSettings::default()),
             tools: Tools::default(),
             ascii: AsciiTable::default(),
@@ -183,6 +193,7 @@ impl PortWerkApp {
             s.modbus_server_sessions.into_iter().map(ModbusServerSession::from_saved).collect(),
             s.modbus_server_active,
         );
+        self.mqtt = Group::new(s.mqtt_sessions.into_iter().map(MqttSession::from_saved).collect(), s.mqtt_active);
         self.rest = RestClient::new(s.rest);
     }
 
@@ -202,6 +213,8 @@ impl PortWerkApp {
             modbus_active: self.modbus.active,
             modbus_server_sessions: self.mbserver.items.iter().map(|s| s.saved()).collect(),
             modbus_server_active: self.mbserver.active,
+            mqtt_sessions: self.mqtt.items.iter().map(|s| s.saved()).collect(),
+            mqtt_active: self.mqtt.active,
             rest: self.rest.s.clone(),
         }
     }
@@ -213,6 +226,7 @@ impl PortWerkApp {
         self.udp.stop_all();
         self.modbus.stop_all();
         self.mbserver.stop_all();
+        self.mqtt.stop_all();
     }
 
     fn notify(&mut self, msg: impl Into<String>, ok: bool) {
@@ -317,6 +331,7 @@ impl PortWerkApp {
                 "udp" => Tab::Udp,
                 "modbus" => Tab::Modbus,
                 "mbserver" => Tab::ModbusServer,
+                "mqtt" => Tab::Mqtt,
                 "rest" => Tab::Rest,
                 "tools" => Tab::Tools,
                 "info" => Tab::About,
@@ -358,6 +373,7 @@ impl PortWerkApp {
             Tab::Udp => (self.udp.open_count(), self.udp.any_busy()),
             Tab::Modbus => (self.modbus.open_count(), self.modbus.any_busy()),
             Tab::ModbusServer => (self.mbserver.open_count(), self.mbserver.any_busy()),
+            Tab::Mqtt => (self.mqtt.open_count(), self.mqtt.any_busy()),
             Tab::Rest => (0, self.rest.busy()),
             _ => (0, false),
         }
@@ -378,6 +394,7 @@ impl PortWerkApp {
                     "UDP-Pakete senden und empfangen, auch Broadcast und Antwort an den letzten Absender",
                     "Modbus-Client RTU und TCP: Coils, Eingänge und Register lesen und schreiben, zyklisch abfragen, Werte als 16/32 Bit, Float oder Text, Datenverkehr als Hex",
                     "Modbus-TCP-Server (Geräte-Simulator): Werte in einer Tabelle bearbeiten, mehrere Clients gleichzeitig, Werte automatisch hochzählen oder zufällig ändern",
+                    "MQTT-Client (3.1.1, auch TLS): mehrere Broker gleichzeitig, Abos mit + und #, Nachrichtenliste als Text/Hex/JSON, Themenübersicht, Veröffentlichen mit QoS/Retain und Wiederholung",
                     "REST-Client: GET/POST/PUT/PATCH/DELETE, Parameter, Header, JSON/Text/Formular-Body, Anmeldung, Variablen wie {{baseUrl}}, Verlauf, cURL-Export",
                     "Projektdateien (.portwerk): alle Sitzungen und Einstellungen speichern und an Kollegen weitergeben – Doppelklick öffnet PortWerk",
                     "Anzeige als Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen",
@@ -421,6 +438,7 @@ impl eframe::App for PortWerkApp {
         self.udp.pump(&ctx);
         self.modbus.pump(&ctx);
         self.mbserver.pump(&ctx);
+        self.mqtt.pump(&ctx);
 
         // shortcuts
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
@@ -496,6 +514,7 @@ impl eframe::App for PortWerkApp {
                     status_group(ui, "UDP", &self.udp);
                     status_group(ui, "Modbus-Client", &self.modbus);
                     status_group(ui, "Modbus-Server", &self.mbserver);
+                    status_group(ui, "MQTT", &self.mqtt);
                     if let Some((msg, ok, at)) = &self.notice {
                         if at.elapsed() < Duration::from_secs(8) {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -525,6 +544,7 @@ impl eframe::App for PortWerkApp {
                 let next = self.mbserver.items.iter().map(|s| s.port()).max().map_or(502, |p| p.saturating_add(1));
                 self.mbserver.ui(ui, "Modbus-Server", shared, move |n| ModbusServerSession::new(n, next))
             }
+            Tab::Mqtt => self.mqtt.ui(ui, "MQTT", shared, MqttSession::new),
             Tab::Rest => self.rest.ui(ui),
             Tab::Tools => self.tools.ui(ui),
             Tab::About => self.about_tab(ui),

@@ -1,6 +1,6 @@
 # PortWerk
 
-Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Server, UDP, Modbus und REST in einem Fenster vereint. Geschrieben in Rust mit [egui](https://github.com/emilk/egui).
+Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Server, UDP, Modbus, MQTT und REST in einem Fenster vereint. Geschrieben in Rust mit [egui](https://github.com/emilk/egui).
 
 ## Funktionen
 
@@ -11,6 +11,7 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 - **UDP:** senden und empfangen, auch Broadcast und Antwort an den letzten Absender.
 - **Modbus-Client RTU und TCP:** Coils, diskrete Eingänge, Holding- und Input-Register lesen (Funktionen 01–04) und schreiben (05, 06, 15, 16). Zyklische Abfrage, Anzeige als 16 oder 32 Bit, Float oder Text in beiden Wortreihenfolgen, Datenverkehr als Hex und Klartext-Meldungen bei Ausnahmen.
 - **Modbus-TCP-Server (Geräte-Simulator):** Coils, diskrete Eingänge, Holding- und Input-Register in einer Tabelle bearbeiten, mehrere Clients gleichzeitig bedienen, auf Wunsch nur eine Geräteadresse beantworten, Werte automatisch hochzählen oder zufällig ändern. Alle Anfragen werden im Klartext und als Hex protokolliert. Die Werte werden im Projekt mitgespeichert.
+- **MQTT-Client (3.1.1):** mehrere Broker gleichzeitig, wahlweise mit TLS (auch eigene CA-Datei oder ohne Zertifikatsprüfung), Benutzer und Passwort, Keep-Alive, Clean Session und automatischem Neuverbinden. Abos mit `+` und `#` und QoS 0–2, eine Nachrichtenliste als Text, Hex oder JSON mit Filter, Pause, Speichern und Mitschrift, eine Themenübersicht mit letztem Wert sowie Veröffentlichen mit QoS, Retain und automatischer Wiederholung.
 - **REST-Client:** Anfragen mit GET, POST, PUT, PATCH, DELETE, HEAD und OPTIONS, mit Parametern, Headern, Body (JSON, Text, Formular) und Anmeldung (Bearer-Token, Benutzer + Passwort, API-Schlüssel). Dazu gespeicherte Anfragen, Variablen wie `{{baseUrl}}`, Verlauf, formatierte JSON-Antworten und Export als cURL-Befehl.
 - **Anzeige:** Text, Hex, Hex + Text oder Dezimal, mit Uhrzeit und Steuerzeichen. Dazu Echo, Pause, Speichern und laufende Mitschrift in eine Datei.
 - **Senden:**
@@ -34,6 +35,7 @@ Ein Terminal für Entwickler, das serielle Schnittstellen, TCP-Client, TCP-Serve
 | `wait_for("OK", ms)` | `true`, wenn „OK“ rechtzeitig kam |
 | `clear_rx()` | Empfangspuffer leeren |
 | `log(...)` / `print(...)` | Meldung ins Fenster schreiben |
+| `mqtt_publish(thema, inhalt [, qos, retain, sitzung])` | über eine verbundene MQTT-Sitzung veröffentlichen |
 | `http_get(url)`, `http_post(url, body)`, `http_request(methode, url, body, typ)` | HTTP-Anfragen, liefern Status und Antwort |
 | `from_hex`, `to_hex`, `crc16_modbus`, `crc16_ccitt`, `crc32`, `crc8`, `sum8`, `xor8` | Helfer |
 

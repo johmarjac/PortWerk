@@ -11,6 +11,7 @@ mod tests {
         ("ascii.rs", include_str!("ascii.rs")),
         ("modbus.rs", include_str!("modbus.rs")),
         ("modbus_server.rs", include_str!("modbus_server.rs")),
+        ("mqtt.rs", include_str!("mqtt.rs")),
         ("rest.rs", include_str!("rest.rs")),
         ("script.rs", include_str!("script.rs")),
         ("sessions.rs", include_str!("sessions.rs")),

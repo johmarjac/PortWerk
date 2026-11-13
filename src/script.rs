@@ -231,6 +231,20 @@ fn setup(lua: &Lua, emit: impl Fn(ScriptMsg) + Clone + 'static, stop: Arc<Atomic
     g.set("sum8", lua.create_function(|_, s: mlua::LuaString| Ok(codec::sum8(&s.as_bytes()) as i64))?)?;
     g.set("xor8", lua.create_function(|_, s: mlua::LuaString| Ok(codec::xor8(&s.as_bytes()) as i64))?)?;
 
+    // --- MQTT: publish through a connected MQTT session
+    g.set("mqtt_publish", lua.create_function(
+        |_, (topic, payload, q, retain, session): (String, mlua::LuaString, Option<u8>, Option<bool>, Option<String>)| {
+            crate::mqtt::script_publish(
+                session.as_deref().unwrap_or(""),
+                &topic,
+                payload.as_bytes().to_vec(),
+                q.unwrap_or(0),
+                retain.unwrap_or(false),
+            )
+            .map_err(mlua::Error::runtime)
+        },
+    )?)?;
+
     // --- HTTP (e.g. forward measured values to a REST API)
     g.set("http_get", lua.create_function(|lua, url: String| {
         let (status, body) = crate::rest::simple_request("GET", &url, None, None).map_err(mlua::Error::runtime)?;
@@ -354,6 +368,20 @@ end
 "#,
     ),
     (
+        "Messwert an MQTT weiterleiten",
+        r#"-- Leitet jede empfangene Zeile als JSON an MQTT weiter
+-- (vorher im Reiter MQTT eine Sitzung verbinden)
+while true do
+    local zeile = recv(2000)
+    if #zeile > 0 then
+        local wert = zeile:gsub("[\r\n\"]", "")
+        mqtt_publish("portwerk/messwert", '{"wert": "' .. wert .. '"}')
+        log("an MQTT gesendet: " .. wert)
+    end
+end
+"#,
+    ),
+    (
         "Endlos-Schleife mit Zähler",
         r#"-- Sendet jede Sekunde AA + Zähler-Byte – läuft bis Stopp
 local n = 0
@@ -378,6 +406,8 @@ Befehle:
   clear_rx()             Empfangspuffer leeren
   log(…) / print(…)      Meldung ins Fenster schreiben
   now_ms()               Millisekunden seit Skriptstart
+MQTT (über eine verbundene MQTT-Sitzung):
+  mqtt_publish(\"thema\", \"inhalt\" [, qos, retain, \"Sitzungsname\"])
 HTTP / REST (liefert Status und Antwort):
   local st, txt = http_get(\"https://…\")
   local st, txt = http_post(\"https://…\", '{\"wert\":1}')   (JSON)
