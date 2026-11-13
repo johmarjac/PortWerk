@@ -2,7 +2,7 @@
 name = "portwerk"
 version = "0.1.0"
 edition = "2024"
-description = "Terminal für serielle Schnittstellen, TCP-Client, TCP-Server und UDP"
+description = "Entwickler-Terminal für Seriell, TCP, UDP, Modbus, MQTT und REST"
 repository = "https://github.com/johmarjac/PortWerk"
 
 [dependencies]

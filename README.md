@@ -49,6 +49,10 @@ Eine neue Version erstellen Sie so:
 
 Statt Schritt 1 und 2 können Sie auch einen Tag wie `v0.2.0` hochladen.
 
+Gibt es die Version schon, bricht der Ablauf sofort mit einem Hinweis ab. Soll sie bewusst ersetzt werden, setzen Sie den Haken **Vorhandene Version ersetzen**. Dann werden das alte Release und sein Tag kurz vor dem Veröffentlichen gelöscht.
+
+Was neu ist, steht in [CHANGELOG.md](CHANGELOG.md). Der Abschnitt zur jeweiligen Version erscheint automatisch auf der Release-Seite.
+
 | System | Datei |
 |---|---|
 | Windows | `…-windows-x64.msi` (Installer) und `…-windows-x64-portable.exe` (ohne Installation) |

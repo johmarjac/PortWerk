@@ -2,6 +2,8 @@
 #
 # Start it by hand: GitHub → Actions → "Release" → "Run workflow",
 # enter a version like 0.2.0. Or push a tag such as v0.2.0.
+# If that version already exists, tick "Vorhandene Version ersetzen":
+# the old release and its tag are removed right before the new one is published.
 #
 # Result per release:
 #   Windows x64   PortWerk-<v>-windows-x64.msi            (installer)
@@ -26,6 +28,10 @@ on:
         default: false
       draft:
         description: "Nur als Entwurf anlegen (noch nicht öffentlich)"
+        type: boolean
+        default: false
+      replace:
+        description: "Vorhandene Version ersetzen (altes Release und Tag werden gelöscht)"
         type: boolean
         default: false
   push:
@@ -62,6 +68,17 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
+      - name: Gibt es die Version schon?
+        if: github.event_name == 'workflow_dispatch' && !inputs.replace
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.v.outputs.version }}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Version $TAG gibt es schon. Neue Versionsnummer wählen oder den Haken 'Vorhandene Version ersetzen' setzen."
+            exit 1
+          fi
 
   windows:
     name: Windows x64 (MSI + portabel)
@@ -195,15 +212,50 @@ jobs:
     needs: [prepare, windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Alte Version entfernen
+        if: github.event_name == 'workflow_dispatch' && inputs.replace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
       - name: Prüfsummen
         run: |
           cd dist
           sha256sum * > SHA256SUMS.txt
           ls -l
+      - name: Text für die Release-Seite
+        env:
+          V: ${{ needs.prepare.outputs.version }}
+        run: |
+          {
+            echo "## Downloads"
+            echo
+            echo "| System | Datei |"
+            echo "|---|---|"
+            echo "| Windows (Installer) | \`PortWerk-$V-windows-x64.msi\` |"
+            echo "| Windows (portabel, ohne Installation) | \`PortWerk-$V-windows-x64-portable.exe\` |"
+            echo "| macOS (Intel + Apple Silicon) | \`PortWerk-$V-macos-universal.dmg\` |"
+            echo "| Linux (Debian/Ubuntu) | \`PortWerk-$V-linux-x64.deb\` / \`-arm64.deb\` |"
+            echo "| Linux (andere) | \`PortWerk-$V-linux-x64.tar.gz\` / \`-arm64.tar.gz\` |"
+            echo
+            echo "macOS: Die App ist nicht von Apple beglaubigt. Beim ersten Start mit Rechtsklick → „Öffnen“ starten."
+            echo
+            # the section "## [V]" of CHANGELOG.md, up to the next "## ["
+            if [ -f CHANGELOG.md ]; then
+              awk -v v="## [$V]" 'index($0, v) == 1 { on = 1; print "## Neu in dieser Version"; next } /^## \[/ { on = 0 } on' CHANGELOG.md
+            fi
+          } > release-body.md
+          cat release-body.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
@@ -211,18 +263,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           prerelease: ${{ inputs.prerelease || false }}
           draft: ${{ inputs.draft || false }}
-          generate_release_notes: true
+          generate_release_notes: false
           fail_on_unmatched_files: true
-          body: |
-            ## Downloads
-
-            | System | Datei |
-            |---|---|
-            | Windows (Installer) | `PortWerk-${{ needs.prepare.outputs.version }}-windows-x64.msi` |
-            | Windows (portabel, ohne Installation) | `PortWerk-${{ needs.prepare.outputs.version }}-windows-x64-portable.exe` |
-            | macOS (Intel + Apple Silicon) | `PortWerk-${{ needs.prepare.outputs.version }}-macos-universal.dmg` |
-            | Linux (Debian/Ubuntu) | `PortWerk-${{ needs.prepare.outputs.version }}-linux-x64.deb` / `-arm64.deb` |
-            | Linux (andere) | `PortWerk-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz` / `-arm64.tar.gz` |
-
-            macOS: Die App ist nicht von Apple beglaubigt. Beim ersten Start mit Rechtsklick → „Öffnen“ starten.
+          body_path: release-body.md
           files: dist/*
