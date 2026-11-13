@@ -343,7 +343,7 @@ pub struct Sub {
 
 impl Default for Sub {
     fn default() -> Self {
-        Self { on: true, topic: "#".into(), qos: 0 }
+        Self { on: true, topic: String::new(), qos: 0 }
     }
 }
 
@@ -402,7 +402,7 @@ impl Default for MqttSaved {
             keep_alive_s: 30,
             clean_session: true,
             auto_reconnect: true,
-            subs: vec![Sub::default()],
+            subs: Vec::new(),
             pub_topic: "portwerk/test".into(),
             pub_payload: "{\"wert\": 42}".into(),
             pub_qos: 0,
@@ -451,6 +451,11 @@ pub struct MqttSession {
     new_sub: String,
     new_sub_qos: u8,
     log_file: Option<(String, File)>,
+    /// A broad subscription waiting for confirmation: (topic, qos, existing index).
+    confirm_broad: Option<(String, u8, Option<usize>)>,
+    rate_start: Instant,
+    rate_count: u32,
+    rate: u32,
 }
 
 fn now() -> String {
@@ -474,6 +479,12 @@ fn preview(p: &[u8], view: MsgView) -> String {
     if s.chars().count() > 300 { format!("{}…", s.chars().take(300).collect::<String>()) } else { s }
 }
 
+/// Subscriptions like "#" or "+/#" that receive every topic of a broker.
+pub fn is_broad(filter: &str) -> bool {
+    let f = filter.trim();
+    f.contains('#') && f.split('/').all(|l| l == "+" || l == "#")
+}
+
 /// Does `topic` match the subscription filter (with + and #)?
 pub fn topic_matches(filter: &str, topic: &str) -> bool {
     let mut f = filter.split('/');
@@ -494,7 +505,12 @@ impl MqttSession {
         Self::from_saved(MqttSaved { name, ..Default::default() })
     }
 
-    pub fn from_saved(s: MqttSaved) -> Self {
+    pub fn from_saved(mut s: MqttSaved) -> Self {
+        // Earlier versions preset an active "#" subscription. Switch it off.
+        let old_default = s.subs.len() == 1 && s.subs[0].on && s.subs[0].topic == "#" && s.subs[0].qos == 0;
+        if old_default {
+            s.subs[0].on = false;
+        }
         let mut m = Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             s,
@@ -512,8 +528,15 @@ impl MqttSession {
             new_sub: String::new(),
             new_sub_qos: 0,
             log_file: None,
+            confirm_broad: None,
+            rate_start: Instant::now(),
+            rate_count: 0,
+            rate: 0,
         };
-        m.event("Bereit. Broker eintragen und „Verbinden“ klicken.", false);
+        m.event("Bereit. Broker eintragen, Themen abonnieren und „Verbinden“ klicken.", false);
+        if old_default {
+            m.event("Das voreingestellte Abo „#“ (alle Themen) wurde ausgeschaltet.", false);
+        }
         m
     }
 
@@ -689,11 +712,17 @@ impl MqttSession {
         section(ui, "Abonnements");
         let mut remove = None;
         let mut changed: Vec<(bool, String, u8)> = Vec::new();
+        let mut confirm = None;
         for (i, s) in self.s.subs.iter_mut().enumerate() {
             ui.push_id(("sub", i), |ui| {
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut s.on, "").on_hover_text("Abo aktiv").changed() {
-                        changed.push((s.on, s.topic.clone(), s.qos));
+                        if s.on && is_broad(&s.topic) {
+                            s.on = false;
+                            confirm = Some((s.topic.clone(), s.qos, Some(i)));
+                        } else {
+                            changed.push((s.on, s.topic.clone(), s.qos));
+                        }
                     }
                     ui.add(egui::Label::new(RichText::new(&s.topic).monospace()).truncate());
                     ui.label(RichText::new(format!("Q{}", s.qos)).small().weak());
@@ -706,6 +735,9 @@ impl MqttSession {
         if let Some(i) = remove {
             let s = self.s.subs.remove(i);
             changed.push((false, s.topic, s.qos));
+        }
+        if confirm.is_some() {
+            self.confirm_broad = confirm;
         }
         ui.horizontal(|ui| {
             let r = ui.add(
@@ -722,13 +754,58 @@ impl MqttSession {
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (ui.button("➕").on_hover_text("Abonnieren").clicked() || enter) && !self.new_sub.trim().is_empty() {
                 let t = self.new_sub.trim().to_string();
-                self.s.subs.retain(|s| s.topic != t);
-                self.s.subs.push(Sub { on: true, topic: t.clone(), qos: self.new_sub_qos });
-                changed.push((true, t, self.new_sub_qos));
+                if is_broad(&t) {
+                    self.confirm_broad = Some((t, self.new_sub_qos, None));
+                } else {
+                    self.s.subs.retain(|s| s.topic != t);
+                    self.s.subs.push(Sub { on: true, topic: t.clone(), qos: self.new_sub_qos });
+                    changed.push((true, t, self.new_sub_qos));
+                }
                 self.new_sub.clear();
             }
         });
         ui.label(RichText::new("+ = eine Ebene, # = alles darunter").small().weak());
+        if self.s.subs.is_empty() {
+            ui.label(RichText::new("Noch kein Abo – empfangen wird nur, was hier steht.").small().italics().weak());
+        }
+
+        // confirmation for "#" and similar
+        if let Some((t, q, idx)) = self.confirm_broad.clone() {
+            let mut decision = None;
+            egui::Window::new("Alle Themen abonnieren?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("„{t}“ abonniert jedes Thema auf diesem Broker."));
+                    ui.label("Auf öffentlichen Brokern sind das oft tausende Nachrichten pro Sekunde.");
+                    ui.label(RichText::new("Besser gezielt abonnieren, z. B. „haus/#“ oder „sensor/+/temp“.").weak());
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Abbrechen").clicked() {
+                            decision = Some(false);
+                        }
+                        if ui.button(RichText::new("Trotzdem abonnieren").color(RED)).clicked() {
+                            decision = Some(true);
+                        }
+                    });
+                });
+            match decision {
+                Some(true) => {
+                    match idx {
+                        Some(i) if i < self.s.subs.len() => self.s.subs[i].on = true,
+                        _ => {
+                            self.s.subs.retain(|s| s.topic != t);
+                            self.s.subs.push(Sub { on: true, topic: t.clone(), qos: q });
+                        }
+                    }
+                    changed.push((true, t, q));
+                    self.confirm_broad = None;
+                }
+                Some(false) => self.confirm_broad = None,
+                None => {}
+            }
+        }
         if let Some(l) = &self.link {
             for (on, t, q) in changed {
                 let _ = l.tx.send(if on { MqCmd::Subscribe(t, q) } else { MqCmd::Unsubscribe(t) });
@@ -864,6 +941,30 @@ impl MqttSession {
             }
         });
 
+        if self.rate >= 100 {
+            let mut stop = false;
+            egui::Frame::new().fill(Color32::from_rgb(255, 236, 200)).corner_radius(4.0).inner_margin(6.0).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let brown = Color32::from_rgb(140, 70, 0);
+                    ui.label(RichText::new(format!("⚠ Sehr viele Nachrichten: {} pro Sekunde.", self.rate)).color(brown).strong());
+                    ui.label(RichText::new("Abos eingrenzen oder:").color(brown));
+                    if ui.button("Alle Abos ausschalten").clicked() {
+                        stop = true;
+                    }
+                });
+            });
+            if stop {
+                for sub in &mut self.s.subs {
+                    if sub.on {
+                        sub.on = false;
+                        if let Some(l) = &self.link {
+                            let _ = l.tx.send(MqCmd::Unsubscribe(sub.topic.clone()));
+                        }
+                    }
+                }
+                self.event("Alle Abos ausgeschaltet", false);
+            }
+        }
         let filter = self.s.filter.trim().to_string();
         let show_sent = self.s.show_sent;
         let idx: Vec<usize> = self
@@ -1013,6 +1114,7 @@ impl Session for MqttSession {
                     MqEvent::Error(m) => self.event(m, true),
                     MqEvent::Message { topic, payload, qos, retain } => {
                         self.received += 1;
+                        self.rate_count += 1;
                         self.add_message(Msg { time: now(), topic, payload, qos, retain, sent: false });
                     }
                     MqEvent::Sent { topic, payload, qos, retain } => {
@@ -1026,6 +1128,11 @@ impl Session for MqttSession {
                 self.connected = false;
                 self.starting = false;
             }
+        }
+        if self.rate_start.elapsed() >= Duration::from_secs(1) {
+            self.rate = self.rate_count;
+            self.rate_count = 0;
+            self.rate_start = Instant::now();
         }
         // registry for scripts
         {
@@ -1083,6 +1190,15 @@ mod tests {
         assert!(tls::config(false, "").is_ok());
         assert!(tls::config(true, "").is_ok());
         assert!(tls::config(false, "gibt-es-nicht.pem").is_err());
+    }
+
+    #[test]
+    fn broad_subscriptions_are_detected_and_old_default_is_off() {
+        assert!(is_broad("#") && is_broad("+/#") && is_broad("+/+/#"));
+        assert!(!is_broad("haus/#") && !is_broad("sensor/+/temp") && !is_broad("+"));
+        assert!(MqttSession::new("x".into()).s.subs.is_empty());
+        let old = MqttSaved { subs: vec![Sub { on: true, topic: "#".into(), qos: 0 }], ..Default::default() };
+        assert!(!MqttSession::from_saved(old).s.subs[0].on);
     }
 
     #[test]
