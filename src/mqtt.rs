@@ -569,8 +569,18 @@ impl MqttSession {
             auto_reconnect: self.s.auto_reconnect,
             subs: self.s.subs.iter().filter(|s| s.on && !s.topic.trim().is_empty()).map(|s| (s.topic.trim().to_string(), s.qos)).collect(),
         };
+        // a new connection starts with an empty topic overview
+        self.clear_topics();
         self.link = Some(spawn(ctx, cfg));
         self.starting = true;
+    }
+
+    fn clear_topics(&mut self) {
+        // a filter set by clicking a topic would now point to nothing
+        if self.topics.contains_key(self.s.filter.trim()) {
+            self.s.filter.clear();
+        }
+        self.topics.clear();
     }
 
     fn disconnect(&mut self) {
@@ -812,7 +822,24 @@ impl MqttSession {
             }
         }
 
-        section(ui, &format!("Themen ({})", self.topics.len()));
+        ui.add_space(6.0);
+        let mut clear = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Themen ({})", self.topics.len())).strong().size(14.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(!self.topics.is_empty(), egui::Button::new("🗑 Themen löschen"))
+                    .on_hover_text("Themenübersicht leeren (die Nachrichtenliste bleibt)")
+                    .clicked()
+                {
+                    clear = true;
+                }
+            });
+        });
+        ui.separator();
+        if clear {
+            self.clear_topics();
+        }
         if self.topics.is_empty() {
             ui.label(RichText::new("Noch keine Nachrichten empfangen.").weak().italics());
         }
@@ -1286,6 +1313,27 @@ mod tests {
         // publish from a script through the registry
         script_publish("Test", "aus/skript", b"hallo".to_vec(), 0, false).unwrap();
         assert_eq!(seen_rx.recv_timeout(Duration::from_secs(5)).unwrap(), "aus/skript=hallo");
+        m.stop();
+    }
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn connecting_clears_the_topic_overview() {
+        let mut m = MqttSession::new("x".into());
+        m.add_message(Msg { time: now(), topic: "a/b".into(), payload: b"1".to_vec(), qos: 0, retain: false, sent: false });
+        m.s.filter = "a/b".into();
+        assert_eq!(m.topics.len(), 1);
+        m.s.host = "127.0.0.1".into();
+        m.s.port = 1; // nothing listens there; only the clearing matters
+        m.s.auto_reconnect = false;
+        m.connect(&egui::Context::default());
+        assert!(m.topics.is_empty());
+        assert!(m.s.filter.is_empty());
+        assert_eq!(m.messages.len(), 1, "die Nachrichtenliste bleibt");
         m.stop();
     }
 }
